@@ -18,7 +18,7 @@ someone would want to work in it all day.
 | **Effort** | 10–14 focused hours, spread over up to 7 days |
 | **You send back** | A public Git repo link + deployed link + a 5 minute video |
 | **Also fill in** | `SUBMISSION.md` in the repo root — it is scored |
-| **Doubts/Bugs** | Any questions can be asked via email to **karan@switchon.io** Asking is fine and costs you nothing |
+| **Doubts/Bugs** | Any questions can be asked via email to Asking is fine and costs you nothing |
 
 **You are not expected to finish everything.** We would rather see four tasks done
 to a standard you would defend in code review than seven done roughly. If you run
@@ -481,11 +481,6 @@ executed badly — and it is last in the suggested order for a reason.
 **Can I spend more than 14 hours on it?**
 Please do not. If the work is taking much longer, cut scope and tell us what you
 cut. Knowing what to leave out is part of what we are looking at.
-
----
-
-Send the submission email with your **repo link**, **deployed link** and **video link** when you are
-done to **karan@switchon.io** and cc the following: **abhijeet@switchon.io, ayush@switchon.io, tom@switchon.io, muskan@switchon.io**
 
  Good luck — and if you get stuck on something that turns out to be our bug
 rather than yours, we would genuinely like to know.

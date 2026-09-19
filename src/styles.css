@@ -15,7 +15,11 @@
 
 body {
   margin: 0;
-  font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font:
+    15px/1.5 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
   color: var(--ink);
   background: var(--bg);
 }
@@ -135,6 +139,7 @@ button:disabled {
   overflow: auto;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-auto-rows: min-content;
   gap: 12px;
   padding: 16px;
   align-content: start;
@@ -142,6 +147,8 @@ button:disabled {
 
 .card {
   position: relative;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
@@ -161,14 +168,27 @@ button:disabled {
   aspect-ratio: 16 / 10;
   object-fit: cover;
   background: var(--bg-soft);
+  flex-shrink: 0;
+}
+.card__thumb--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-soft);
+  background: var(--bg-soft);
 }
 .card__body {
+  /* flex: 1; */
+  min-height: 64px;
   padding: 8px 10px 10px;
 }
 .card__name {
   margin: 0 0 2px;
   font-weight: 600;
   font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .card__check {
   position: absolute;
@@ -257,6 +277,13 @@ button:disabled {
   padding: 48px 16px;
   text-align: center;
   flex: 1;
+}
+.empty--error p:first-child {
+  color: var(--danger);
+  font-weight: 600;
+}
+.empty--loading {
+  color: var(--ink-soft);
 }
 
 @media (max-width: 720px) {

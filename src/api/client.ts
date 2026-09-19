@@ -1,11 +1,10 @@
 import type { Asset, AssetPage, AssetQuery, BulkResult } from '@/lib/types';
 
 /**
- * Client, pass 1: typed errors + cancellation.
+ * Client, pass 2: typed errors, cancellation, and de-duplication.
  *
  * Still open (closed in later passes):
  *   - no retry / backoff / Retry-After handling
- *   - no de-duplication of concurrent identical requests
  */
 
 /** Every error the API can return, typed instead of parsed from a string. */
@@ -106,12 +105,107 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/**
+ * Collapses identical concurrent GET requests into a single network call.
+ * Went through two wrong versions before this one — worth recording why,
+ * since the failure mode only shows up under a specific timing:
+ *
+ * React 18 Strict Mode double-invokes every effect on mount, synchronously:
+ * setup → cleanup → setup, all before any promise has settled. A naive
+ * "one shared AbortController" dedupe (attempt 1) let caller A's
+ * cleanup-triggered abort kill the response caller B was legitimately
+ * waiting on, since B's request reused the same still-pending promise.
+ * A refcounted version (attempt 2) still broke, because AbortController's
+ * 'abort' event fires SYNCHRONOUSLY — refCount hit zero and cancelled the
+ * shared fetch a tick before B (Strict Mode's second, "real" mount) had
+ * even registered to keep it alive. Confirmed both failures by replaying
+ * the exact timing against the live API before landing on this version.
+ *
+ * Fix: still refcount callers, but defer the "is anyone still interested"
+ * check by one microtask before actually cancelling the shared fetch. Since
+ * Strict Mode's setup → cleanup → setup runs fully synchronously (no await
+ * in between), a "rescue" caller always gets to re-register before the
+ * deferred check runs — while a genuinely abandoned request (no rescue
+ * arrives) still gets truly network-cancelled once the microtask fires,
+ * which matters: without it, an abandoned query would keep running in the
+ * background and still eat rate-limit budget, silently reintroducing the
+ * exact problem cancellation was built to solve in the first place.
+ */
+interface InFlightEntry<T> {
+  promise: Promise<T>;
+  controller: AbortController;
+  refCount: number;
+}
+
+const inFlightGets = new Map<string, InFlightEntry<unknown>>();
+
+function dedupedGet<T>(
+  key: string,
+  callerSignal: AbortSignal | undefined,
+  exec: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  let entry = inFlightGets.get(key) as InFlightEntry<T> | undefined;
+
+  if (!entry) {
+    const controller = new AbortController();
+    const promise = exec(controller.signal).finally(() => {
+      inFlightGets.delete(key);
+    });
+    entry = { promise, controller, refCount: 0 };
+    inFlightGets.set(key, entry as InFlightEntry<unknown>);
+  }
+
+  entry.refCount += 1;
+  const sharedEntry = entry;
+
+  if (!callerSignal) return sharedEntry.promise;
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+
+    const onCallerAbort = () => {
+      if (settled) return;
+      settled = true;
+      sharedEntry.refCount -= 1;
+      // Deferred by one microtask so a synchronous "rescue" caller (Strict
+      // Mode's second mount, which runs right after this) can re-register
+      // before we commit to actually cancelling the shared network request.
+      queueMicrotask(() => {
+        if (sharedEntry.refCount <= 0) {
+          sharedEntry.controller.abort();
+        }
+      });
+      reject(new RequestCancelledError());
+    };
+    callerSignal.addEventListener('abort', onCallerAbort);
+
+    sharedEntry.promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        callerSignal.removeEventListener('abort', onCallerAbort);
+        resolve(value);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        callerSignal.removeEventListener('abort', onCallerAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 export function listAssets(query: AssetQuery, signal?: AbortSignal): Promise<AssetPage> {
-  return request<AssetPage>(`/api/assets?${toSearchParams(query)}`, { signal });
+  const path = `/api/assets?${toSearchParams(query)}`;
+  return dedupedGet(path, signal, (sharedSignal) =>
+    request<AssetPage>(path, { signal: sharedSignal }),
+  );
 }
 
 export function getAsset(id: string, signal?: AbortSignal): Promise<Asset> {
-  return request<Asset>(`/api/assets/${id}`, { signal });
+  const path = `/api/assets/${id}`;
+  return dedupedGet(path, signal, (sharedSignal) => request<Asset>(path, { signal: sharedSignal }));
 }
 
 export function getAssetsByIds(
@@ -119,7 +213,8 @@ export function getAssetsByIds(
   signal?: AbortSignal,
 ): Promise<{ items: Asset[]; missing: string[] }> {
   // Note: the endpoint rejects more than 25 ids per call — caller must chunk.
-  return request(`/api/assets/batch?ids=${ids.join(',')}`, { signal });
+  const path = `/api/assets/batch?ids=${ids.join(',')}`;
+  return dedupedGet(path, signal, (sharedSignal) => request(path, { signal: sharedSignal }));
 }
 
 export function updateAsset(

@@ -3,6 +3,7 @@ import { bulkSetStatus } from '@/api/client';
 import { AssetDetail } from '@/features/assets/AssetDetail';
 import { AssetGrid } from '@/features/assets/AssetGrid';
 import { useAssets } from '@/features/assets/useAssets';
+import { useUrlQuery } from '@/features/assets/useUrlQuery';
 import { statusLabel } from '@/lib/format';
 import type { Asset, AssetStatus, AssetQuery } from '@/lib/types';
 
@@ -15,15 +16,19 @@ const SORTS: Array<{ value: NonNullable<AssetQuery['sort']>; label: string }> = 
 ];
 
 export function App() {
-  const [q, setQ] = useState('');
-  const [status, setStatus] = useState<AssetStatus[]>([]);
-  const [sort, setSort] = useState<NonNullable<AssetQuery['sort']>>('updatedAt:desc');
+  const { rawQ, setRawQ, debouncedQ, status, toggleStatus, sort, setSort } = useUrlQuery();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // Every keystroke sends a request. Nothing is debounced or cancelled.
-  const { items, total, loading, error } = useAssets({ q, status, sort, limit: 24 });
+  // debouncedQ (not rawQ) drives the network request, so a burst of
+  // keystrokes collapses into one request instead of one per character.
+  const { items, total, loading, error } = useAssets({
+    q: debouncedQ,
+    status,
+    sort,
+    limit: 24,
+  });
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -60,8 +65,8 @@ export function App() {
           className="search"
           type="search"
           placeholder="Search assets"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
+          value={rawQ}
+          onChange={(e) => setRawQ(e.target.value)}
         />
         <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
           {SORTS.map((option) => (
@@ -78,11 +83,7 @@ export function App() {
             <input
               type="checkbox"
               checked={status.includes(s)}
-              onChange={(e) =>
-                setStatus((prev) =>
-                  e.target.checked ? [...prev, s] : prev.filter((x) => x !== s),
-                )
-              }
+              onChange={(e) => toggleStatus(s, e.target.checked)}
             />
             {statusLabel(s)}
           </label>
