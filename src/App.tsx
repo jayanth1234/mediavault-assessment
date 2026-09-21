@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { bulkSetStatus } from '@/api/client';
 import { AssetDetail } from '@/features/assets/AssetDetail';
 import { AssetGrid } from '@/features/assets/AssetGrid';
@@ -23,21 +23,25 @@ export function App() {
 
   // debouncedQ (not rawQ) drives the network request, so a burst of
   // keystrokes collapses into one request instead of one per character.
-  const { items, total, loading, error } = useAssets({
+  const { items, total, loading, loadingMore, error, hasMore, loadMore } = useAssets({
     q: debouncedQ,
     status,
     sort,
     limit: 24,
   });
 
-  function toggleSelect(id: string) {
+  // Wrapped in useCallback so its identity stays stable across App
+  // re-renders — AssetCard's React.memo depends on this being stable, or
+  // every card would re-render on every selection change regardless of the
+  // memoization, silently defeating the whole point of it.
+  const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }
+  }, []);
 
   async function applyBulkStatus(next: AssetStatus) {
     const ids = [...selectedIds];
@@ -106,11 +110,15 @@ export function App() {
       )}
 
       {notice && <p className="notice">{notice}</p>}
-      {error && <p className="error">{error.message}</p>}
 
       <main className="content">
         <AssetGrid
           assets={items}
+          loading={loading}
+          loadingMore={loadingMore}
+          error={error}
+          hasMore={hasMore}
+          onLoadMore={loadMore}
           selectedIds={selectedIds}
           activeId={activeId}
           onToggleSelect={toggleSelect}

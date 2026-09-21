@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
+import { VirtuosoGrid } from 'react-virtuoso';
 import { thumbnailUrl, type ApiError } from '@/api/client';
 import { formatBytes, formatDate, statusLabel } from '@/lib/format';
 import type { Asset } from '@/lib/types';
@@ -6,12 +7,20 @@ import type { Asset } from '@/lib/types';
 interface Props {
   assets: Asset[];
   loading: boolean;
+  loadingMore: boolean;
   error: ApiError | null;
+  hasMore: boolean;
+  onLoadMore: () => void;
   selectedIds: Set<string>;
   activeId: string | null;
   onToggleSelect: (id: string) => void;
   onOpen: (id: string) => void;
 }
+
+//  Thumbnail with a stable placeholder on load failure.
+//  `loading="lazy"` deliberately omitted: virtualization already
+//  means only on-screen (plus a small overscan) rows are ever mounted, so the
+//  browser's own lazy-loading has nothing left to add.
 
 function Thumbnail({ assetId }: { assetId: string }) {
   const [failed, setFailed] = useState(false);
@@ -29,18 +38,72 @@ function Thumbnail({ assetId }: { assetId: string }) {
   }
 
   return (
-    <img
-      className="card__thumb"
-      src={thumbnailUrl(assetId)}
-      alt=""
-      loading="lazy"
-      onError={() => setFailed(true)}
-    />
+    <img className="card__thumb" src={thumbnailUrl(assetId)} alt="" onError={() => setFailed(true)} />
   );
 }
 
-export function AssetGrid({ assets, loading, error, selectedIds, activeId, onToggleSelect, onOpen }: Props) {
-  if (error) {
+
+// One card, memoized. This is what makes "toggling selection on one card
+// doesn't re-render the others" actually true. Usage of React.memo is deliberate and important: 
+// the card is a pure function of its props, and the parent grid re-renders whenever selection changes,
+// so without memoization every card would re-render on every selection change, 
+// defeating the whole point of the optimization.
+
+const AssetCard = memo(function AssetCard({
+  asset,
+  selected,
+  active,
+  onToggleSelect,
+  onOpen,
+}: {
+  asset: Asset;
+  selected: boolean;
+  active: boolean;
+  onToggleSelect: (id: string) => void;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <div
+      className={'card' + (selected ? ' card--selected' : '') + (active ? ' card--active' : '')}
+      onClick={() => onOpen(asset.id)}
+    >
+      <Thumbnail assetId={asset.id} />
+      <div className="card__body">
+        <p className="card__name">{asset.name}</p>
+        <p className="muted">
+          {asset.kind} · {formatBytes(asset.sizeBytes)} · {formatDate(asset.updatedAt)}
+        </p>
+        <span className={`pill pill--${asset.status}`}>{statusLabel(asset.status)}</span>
+      </div>
+      <input
+        type="checkbox"
+        className="card__check"
+        checked={selected}
+        onClick={(e) => e.stopPropagation()}
+        onChange={() => onToggleSelect(asset.id)}
+      />
+    </div>
+  );
+});
+
+
+// Virtualized grid via react-virtuoso's VirtuosoGrid, which is purpose-built
+// for responsive multi-column grids, so 12400 assets can be scrolled through 
+// without ever mounting them all at once.
+
+export function AssetGrid({
+  assets,
+  loading,
+  loadingMore,
+  error,
+  hasMore,
+  onLoadMore,
+  selectedIds,
+  activeId,
+  onToggleSelect,
+  onOpen,
+}: Props) {
+  if (error && assets.length === 0) {
     return (
       <div className="empty empty--error" role="alert">
         <p>Couldn't load assets.</p>
@@ -67,34 +130,45 @@ export function AssetGrid({ assets, loading, error, selectedIds, activeId, onTog
   }
 
   return (
-    <div className="grid">
-      {assets.map((asset) => (
-        <div
-          key={asset.id}
-          className={
-            'card' +
-            (selectedIds.has(asset.id) ? ' card--selected' : '') +
-            (activeId === asset.id ? ' card--active' : '')
+    <VirtuosoGrid
+      className="grid-scroller"
+      listClassName="grid__list"
+      itemClassName="grid__cell"
+      data={assets}
+      overscan={200}
+      endReached={() => {
+        if (hasMore && !loading && !loadingMore) onLoadMore();
+      }}
+      computeItemKey={(index) => assets[index]?.id ?? index}
+      itemContent={(_index, asset) => (
+        <AssetCard
+          asset={asset}
+          selected={selectedIds.has(asset.id)}
+          active={activeId === asset.id}
+          onToggleSelect={onToggleSelect}
+          onOpen={onOpen}
+        />
+      )}
+      components={{
+        Footer: () => {
+          if (error && assets.length > 0) {
+            return (
+              <div className="grid__loading-more grid__loading-more--error" role="alert">
+                <p className="muted">Couldn't load more — {error.message}</p>
+                <button onClick={onLoadMore}>Retry</button>
+              </div>
+            );
           }
-          onClick={() => onOpen(asset.id)}
-        >
-          <Thumbnail assetId={asset.id} />
-          <div className="card__body">
-            <p className="card__name">{asset.name}</p>
-            <p className="muted">
-              {asset.kind} · {formatBytes(asset.sizeBytes)} · {formatDate(asset.updatedAt)}
-            </p>
-            <span className={`pill pill--${asset.status}`}>{statusLabel(asset.status)}</span>
-          </div>
-          <input
-            type="checkbox"
-            className="card__check"
-            checked={selectedIds.has(asset.id)}
-            onClick={(e) => e.stopPropagation()}
-            onChange={() => onToggleSelect(asset.id)}
-          />
-        </div>
-      ))}
-    </div>
+          if (loadingMore) {
+            return (
+              <p className="muted grid__loading-more" aria-live="polite">
+                Loading more…
+              </p>
+            );
+          }
+          return null;
+        },
+      }}
+    />
   );
 }

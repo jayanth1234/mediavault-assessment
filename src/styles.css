@@ -15,11 +15,7 @@
 
 body {
   margin: 0;
-  font:
-    15px/1.5 system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
+  font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
   color: var(--ink);
   background: var(--bg);
 }
@@ -134,15 +130,27 @@ button:disabled {
   min-height: 0;
 }
 
-.grid {
+.grid-scroller {
   flex: 1;
-  overflow: auto;
+  min-height: 0;
+}
+.grid__list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  grid-auto-rows: min-content;
   gap: 12px;
   padding: 16px;
-  align-content: start;
+}
+.grid__cell {
+  min-width: 0;
+}
+.grid__loading-more {
+  text-align: center;
+  padding: 16px;
+  grid-column: 1 / -1;
+}
+.grid__loading-more--error p {
+  color: var(--danger);
+  margin-bottom: 8px;
 }
 
 .card {
@@ -178,7 +186,7 @@ button:disabled {
   background: var(--bg-soft);
 }
 .card__body {
-  /* flex: 1; */
+  flex: 1;
   min-height: 64px;
   padding: 8px 10px 10px;
 }
@@ -186,6 +194,12 @@ button:disabled {
   margin: 0 0 2px;
   font-weight: 600;
   font-size: 14px;
+  /* Long names don't push the card wider or wrap unpredictably. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card__body .muted {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { listAssets, ApiError, RequestCancelledError } from '@/api/client';
 import type { Asset, AssetQuery } from '@/lib/types';
 
@@ -6,79 +6,128 @@ interface State {
   items: Asset[];
   total: number;
   nextCursor: string | null;
+  /** True only while fetching the FIRST page of the current query. */
   loading: boolean;
+  /** True while fetching a subsequent page via loadMore(). */
+  loadingMore: boolean;
   error: ApiError | null;
 }
 
-/**
- * Loader, pass 1: race-safe.
- *
- * Two independent defenses against stale responses, both necessary:
- *  1. AbortController cancels the in-flight fetch for the previous query as
- *     soon as a new one starts — this is what actually stops the wasted
- *     network call and keeps it off the rate-limit budget.
- *  2. A monotonically increasing request id lets the resolved handler check
- *     "am I still the latest request" before touching state, as a second
- *     line of defense in case a response resolves in the same tick the
- *     abort fires (or a caller reuses this hook without wiring the signal
- *     through correctly).
- *
- * Still open (closed in later passes): debounce, URL state, de-duplication,
- * retry/backoff, pagination beyond a single page.
- */
+function toApiError(err: unknown): ApiError {
+  return err instanceof ApiError
+    ? err
+    : new ApiError({
+        status: 0,
+        code: 'unknown',
+        message: 'Something went wrong.',
+        retryAfterSeconds: null,
+      });
+}
+
+// Cursor pagination with generation-safe resets and cancellation of stale in-flight requests.
 export function useAssets(query: AssetQuery) {
   const [state, setState] = useState<State>({
     items: [],
     total: 0,
     nextCursor: null,
     loading: true,
+    loadingMore: false,
     error: null,
   });
 
-  const latestRequestId = useRef(0);
+  const generation = useRef(0);
+  const inFlightControllers = useRef<Set<AbortController>>(new Set());
 
+  const abortAllInFlight = useCallback(() => {
+    for (const c of inFlightControllers.current) c.abort();
+    inFlightControllers.current.clear();
+  }, []);
+
+  // Query changed: new generation, reset, fetch page 1.
   useEffect(() => {
-    const requestId = ++latestRequestId.current;
-    const controller = new AbortController();
+    const myGeneration = ++generation.current;
+    abortAllInFlight();
 
-    setState((s) => ({ ...s, loading: true, error: null }));
+    const controller = new AbortController();
+    inFlightControllers.current.add(controller);
+
+    setState({
+      items: [],
+      total: 0,
+      nextCursor: null,
+      loading: true,
+      loadingMore: false,
+      error: null,
+    });
 
     listAssets(query, controller.signal)
       .then((page) => {
-        // Belt-and-braces: only the most recent request is allowed to write state.
-        if (requestId !== latestRequestId.current) return;
+        inFlightControllers.current.delete(controller);
+        if (myGeneration !== generation.current) return;
         setState({
           items: page.items,
           total: page.total,
           nextCursor: page.nextCursor,
           loading: false,
+          loadingMore: false,
           error: null,
         });
       })
       .catch((err: unknown) => {
-        if (requestId !== latestRequestId.current) return;
-        // A cancellation is not a failure — the request that superseded this
-        // one owns updating state, so this one has nothing to report.
+        inFlightControllers.current.delete(controller);
+        if (myGeneration !== generation.current) return;
         if (err instanceof RequestCancelledError) return;
-        setState((s) => ({
-          ...s,
-          loading: false,
-          error:
-            err instanceof ApiError
-              ? err
-              : new ApiError({
-                  status: 0,
-                  code: 'unknown',
-                  message: 'Something went wrong.',
-                  retryAfterSeconds: null,
-                }),
-        }));
+        setState((s) => ({ ...s, loading: false, loadingMore: false, error: toApiError(err) }));
       });
 
-    // Cleanup fires on every dependency change AND on unmount — both cases
-    // where an in-flight request for this hook instance is no longer wanted.
-    return () => controller.abort();
+    return () => {
+      // Effect cleanup covers both "query changed again" and unmount.
+      abortAllInFlight();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(query)]);
 
-  return state;
+  const loadMore = useCallback(() => {
+    setState((s) => {
+      if (s.loading || s.loadingMore || !s.nextCursor) return s;
+
+      const myGeneration = generation.current;
+      const cursor = s.nextCursor;
+      const controller = new AbortController();
+      inFlightControllers.current.add(controller);
+
+      listAssets({ ...query, cursor }, controller.signal)
+        .then((page) => {
+          inFlightControllers.current.delete(controller);
+          if (myGeneration !== generation.current) return; // query moved on — discard
+          setState((prev) => ({
+            items: [...prev.items, ...page.items],
+            total: page.total,
+            nextCursor: page.nextCursor,
+            loading: false,
+            loadingMore: false,
+            error: null,
+          }));
+        })
+        .catch((err: unknown) => {
+          inFlightControllers.current.delete(controller);
+          if (myGeneration !== generation.current) return;
+          if (err instanceof RequestCancelledError) return;
+          setState((prev) => ({ ...prev, loadingMore: false, error: toApiError(err) }));
+        });
+
+      return { ...s, loadingMore: true };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(query)]);
+
+  return {
+    items: state.items,
+    total: state.total,
+    hasMore: state.nextCursor !== null,
+    loading: state.loading,
+    loadingMore: state.loadingMore,
+    error: state.error,
+    loadMore,
+  };
 }
