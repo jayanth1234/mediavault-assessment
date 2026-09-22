@@ -123,6 +123,18 @@ button:disabled {
 .error {
   color: var(--danger);
 }
+.notice--partial {
+  background: #fff8ec;
+}
+.bulk-failures {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.bulk-failures code {
+  font-size: 11px;
+}
 
 .content {
   display: flex;

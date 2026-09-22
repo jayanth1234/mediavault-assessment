@@ -1,8 +1,9 @@
-import { useCallback, useState } from 'react';
-import { bulkSetStatus } from '@/api/client';
+import { useMemo, useState } from 'react';
 import { AssetDetail } from '@/features/assets/AssetDetail';
 import { AssetGrid } from '@/features/assets/AssetGrid';
 import { useAssets } from '@/features/assets/useAssets';
+import { useBulkStatusAction } from '@/features/assets/useBulkStatusAction';
+import { useSelection } from '@/features/assets/useSelection';
 import { useUrlQuery } from '@/features/assets/useUrlQuery';
 import { statusLabel } from '@/lib/format';
 import type { Asset, AssetStatus, AssetQuery } from '@/lib/types';
@@ -17,49 +18,35 @@ const SORTS: Array<{ value: NonNullable<AssetQuery['sort']>; label: string }> = 
 
 export function App() {
   const { rawQ, setRawQ, debouncedQ, status, toggleStatus, sort, setSort } = useUrlQuery();
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   // debouncedQ (not rawQ) drives the network request, so a burst of
   // keystrokes collapses into one request instead of one per character.
-  const { items, total, loading, loadingMore, error, hasMore, loadMore } = useAssets({
-    q: debouncedQ,
-    status,
-    sort,
-    limit: 24,
-  });
+  const {
+    items,
+    total,
+    loading,
+    loadingMore,
+    error,
+    hasMore,
+    loadMore,
+    patchItemsOptimistically,
+    replaceItems,
+  } = useAssets({ q: debouncedQ, status, sort, limit: 24 });
 
-  // Wrapped in useCallback so its identity stays stable across App
-  // re-renders — AssetCard's React.memo depends on this being stable, or
-  // every card would re-render on every selection change regardless of the
-  // memoization, silently defeating the whole point of it.
-  const toggleSelect = useCallback((id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
+  const orderedIds = useMemo(() => items.map((a) => a.id), [items]);
+  const { selectedIds, toggle: toggleSelect, selectAllLoaded, clear: clearSelection } = useSelection(orderedIds);
 
-  async function applyBulkStatus(next: AssetStatus) {
-    const ids = [...selectedIds];
-    if (ids.length === 0) return;
-    setNotice(null);
-    try {
-      // Sends every selected id in one call, which the API refuses above 50.
-      const result = await bulkSetStatus(ids, next);
-      setNotice(`${result.applied} updated, ${result.failed} failed.`);
-      setSelectedIds(new Set());
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : 'Bulk update failed');
-    }
+  const bulk = useBulkStatusAction({ items, patchItemsOptimistically, replaceItems });
+
+  function handleSaved(updated: Asset) {
+    // Sync the list's copy so the grid reflects a single-asset edit made in
+    // the detail panel, instead of showing a stale row until the next
+    // unrelated refetch — this was defect #11 from the baseline inventory.
+    replaceItems([updated]);
   }
 
-  function handleSaved(_asset: Asset) {
-    // The list is not told that anything changed, so it shows stale rows.
-  }
+  const retryableCount = bulk.lastSummary?.failed.filter((f) => f.retryable).length ?? 0;
 
   return (
     <div className="app">
@@ -101,15 +88,45 @@ export function App() {
         <div className="bulkbar">
           <span>{selectedIds.size} selected</span>
           {STATUSES.map((s) => (
-            <button key={s} onClick={() => applyBulkStatus(s)}>
+            <button key={s} disabled={bulk.running} onClick={() => bulk.run([...selectedIds], s)}>
               Set {statusLabel(s).toLowerCase()}
             </button>
           ))}
-          <button onClick={() => setSelectedIds(new Set())}>Clear selection</button>
+          <button onClick={selectAllLoaded} disabled={bulk.running}>
+            Select all loaded ({items.length})
+          </button>
+          <button onClick={clearSelection} disabled={bulk.running}>
+            Clear selection
+          </button>
         </div>
       )}
 
-      {notice && <p className="notice">{notice}</p>}
+      {bulk.running && <p className="notice">Updating {selectedIds.size || ''} assets…</p>}
+
+      {bulk.lastSummary && !bulk.running && (
+        <div className={bulk.lastSummary.failed.length > 0 ? 'notice notice--partial' : 'notice'}>
+          <p>
+            {bulk.lastSummary.applied} updated
+            {bulk.lastSummary.failed.length > 0 && `, ${bulk.lastSummary.failed.length} failed`}.
+          </p>
+          {bulk.lastSummary.failed.length > 0 && (
+            <ul className="bulk-failures">
+              {bulk.lastSummary.failed.map((f) => (
+                <li key={f.id}>
+                  <code>{f.id}</code> — {f.message}
+                  {!f.retryable && ' (won\u2019t succeed on retry)'}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="row">
+            {retryableCount > 0 && (
+              <button onClick={bulk.retryFailed}>Retry {retryableCount} failed</button>
+            )}
+            <button onClick={bulk.dismiss}>Dismiss</button>
+          </div>
+        </div>
+      )}
 
       <main className="content">
         <AssetGrid

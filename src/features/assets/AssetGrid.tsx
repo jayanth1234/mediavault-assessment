@@ -13,7 +13,7 @@ interface Props {
   onLoadMore: () => void;
   selectedIds: Set<string>;
   activeId: string | null;
-  onToggleSelect: (id: string) => void;
+  onToggleSelect: (id: string, opts?: { shiftKey?: boolean }) => void;
   onOpen: (id: string) => void;
 }
 
@@ -59,7 +59,7 @@ const AssetCard = memo(function AssetCard({
   asset: Asset;
   selected: boolean;
   active: boolean;
-  onToggleSelect: (id: string) => void;
+  onToggleSelect: (id: string, opts?: { shiftKey?: boolean }) => void;
   onOpen: (id: string) => void;
 }) {
   return (
@@ -79,8 +79,17 @@ const AssetCard = memo(function AssetCard({
         type="checkbox"
         className="card__check"
         checked={selected}
-        onClick={(e) => e.stopPropagation()}
-        onChange={() => onToggleSelect(asset.id)}
+        aria-label={`Select ${asset.name}`}
+        onClick={(e) => {
+          e.stopPropagation();
+
+          onToggleSelect(asset.id, {
+            shiftKey: e.shiftKey,
+          });
+        }}
+        onChange={() => {
+          // State is handled by onClick.
+        }}
       />
     </div>
   );

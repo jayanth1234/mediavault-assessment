@@ -121,6 +121,28 @@ export function useAssets(query: AssetQuery) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(query)]);
 
+  /**
+   * Used for optimistic bulk-status updates: applies a patch to the current items immediately
+   */
+  const patchItemsOptimistically = useCallback((ids: string[], patch: Partial<Asset>) => {
+    const idSet = new Set(ids);
+    setState((prev) => ({
+      ...prev,
+      items: prev.items.map((a) => (idSet.has(a.id) ? { ...a, ...patch } : a)),
+    }));
+  }, []);
+
+  /**
+   * Bulk update
+   */
+  const replaceItems = useCallback((assets: Asset[]) => {
+    const byId = new Map(assets.map((a) => [a.id, a]));
+    setState((prev) => ({
+      ...prev,
+      items: prev.items.map((a) => byId.get(a.id) ?? a),
+    }));
+  }, []);
+
   return {
     items: state.items,
     total: state.total,
@@ -129,5 +151,7 @@ export function useAssets(query: AssetQuery) {
     loadingMore: state.loadingMore,
     error: state.error,
     loadMore,
+    patchItemsOptimistically,
+    replaceItems,
   };
 }

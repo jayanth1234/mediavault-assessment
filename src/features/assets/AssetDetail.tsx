@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getAsset, thumbnailUrl, updateAsset } from '@/api/client';
+import { ApiError, getAsset, thumbnailUrl, updateAsset } from '@/api/client';
 import { formatBytes, formatDate, formatDuration, statusLabel } from '@/lib/format';
 import type { Asset, AssetStatus } from '@/lib/types';
 
@@ -12,32 +12,50 @@ interface Props {
 }
 
 /**
- * Baseline detail panel. Loads on open, saves with no optimistic update,
- * surfaces failures as raw strings, and does nothing about focus.
+ * Detail panel. Saves a status change with the asset's current `version`;
+ * the API rejects a stale version with `409 version_conflict` if someone
+ * else changed the asset first.
  */
 export function AssetDetail({ id, onClose, onSaved }: Props) {
   const [asset, setAsset] = useState<Asset | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [conflictNotice, setConflictNotice] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setAsset(null);
     setError(null);
+    setConflictNotice(false);
     getAsset(id)
       .then(setAsset)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Load failed'));
+      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : 'Load failed'));
   }, [id]);
 
   async function setStatus(status: AssetStatus) {
     if (!asset) return;
     setSaving(true);
     setError(null);
+    setConflictNotice(false);
     try {
       const updated = await updateAsset(asset.id, asset.version, { status });
       setAsset(updated);
       onSaved(updated);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed');
+      if (err instanceof ApiError && err.code === 'version_conflict') {
+        // Someone else changed this asset first. Refetch and show the real
+        // current state — both here and in the grid — rather than retrying
+        // blind against a version we know is stale.
+        setConflictNotice(true);
+        try {
+          const latest = await getAsset(asset.id);
+          setAsset(latest);
+          onSaved(latest);
+        } catch {
+          setError('This asset changed elsewhere, and the latest version could not be loaded. Close and reopen to see it.');
+        }
+      } else {
+        setError(err instanceof ApiError ? err.message : 'Save failed');
+      }
     } finally {
       setSaving(false);
     }
@@ -51,6 +69,11 @@ export function AssetDetail({ id, onClose, onSaved }: Props) {
       </div>
 
       {error && <p className="error">{error}</p>}
+      {conflictNotice && !error && (
+        <p className="notice notice--partial">
+          Someone else updated this asset first. Showing the latest version — reapply your change if it's still needed.
+        </p>
+      )}
       {!asset && !error && <p className="muted">Loading…</p>}
 
       {asset && (
